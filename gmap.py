@@ -68,7 +68,7 @@ def parse_map_file_for_enemy2(map_file_path):
                 y = int(parts[1].strip())
                 enemy2_coords.add((x, y))
 
-parse_map_file_for_enemy2("mapas/mapa_dificil.pl")
+parse_map_file_for_enemy2("mapas/mapa_facil.pl")
 
 # função de decisão: consulta a próxima ação no prolog
 def decisao():

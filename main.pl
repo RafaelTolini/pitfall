@@ -1,13 +1,13 @@
+:-dynamic ouro/1.
 :-dynamic posicao/3.
 :-dynamic memory/3.
 :-dynamic visitado/2.
 :-dynamic certeza/2.
+:-dynamic blocked/2.
 :-dynamic energia/1.
 :-dynamic pontuacao/1.
-:-dynamic ouro/1. %Contador de ouro
-:-dynamic blocked/2. %Posições bloqueadas
 
-:-consult('mapas/mapa_dificil.pl').
+:-consult('mapas/mapa_facil.pl').
 
 delete([], _, []).
 delete([Elem|Tail], Del, Result) :-
@@ -256,16 +256,35 @@ show_mem(_,0) :- energia(E), pontuacao(P), write('E: '), write(E), write('   P: 
 
 capture_mem(String) :- with_output_to(string(String), show_mem).
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Código adicionado
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Outros
+%% Código do trabalho
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Gerenciamento de bloqueio A*
+dano_max_do_monstro(50).
+
+%% funcs direcao
+
+%% mapeamento das direções
+direcoes(norte, 0,  1).
+direcoes(leste,  1,  0).
+direcoes(sul,    0, -1).
+direcoes(oeste, -1,  0).
+
+%% index das direções
+idx_direcao(norte, 0).
+idx_direcao(leste, 1).
+idx_direcao(sul,   2).
+idx_direcao(oeste, 3).
+
+%% verifica se (X,Y) é seguro
+seguro(1,1).
+
+seguro(X,Y) :-
+    certeza(X,Y),
+    memory(X,Y, []).
+
+%% funcs bloqueio A*
+
 add_blocked(X,Y) :- blocked(X,Y), !.
 add_blocked(X,Y) :- assertz(blocked(X,Y)).
 
@@ -273,326 +292,202 @@ clear_blocked :- retractall(blocked(_,_)).
 
 not_blocked(X,Y) :- \+ blocked(X,Y).
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% funcs de busca
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% "Definições" simples
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% acha lugar visitado com suspeita de monstro adjacente mais proximo do agente
+adj_a_monstro_mais_prox(TX,TY,Dir,D) :-
+    posicao(X0,Y0,_),
+    findall( Dist-(VX,VY,Dir1),
+             ( faz_fronteira_com_monstro(VX,VY,Dir1),
+               Dist is abs(VX-X0)+abs(VY-Y0) ),
+             Pairs), Pairs \= [],
+    keysort(Pairs,[D-(TX,TY,Dir)|_]).
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Dano máximo do monstro
-max_monster_damage(50).   
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% acha lugar visitado com suspeita de telettransporte adjacente mais proximo do agente
+adj_a_tp_mais_prox(TX,TY,Dir,D) :-                     
+    posicao(X0,Y0,_),
+    findall( Dist-(VX,VY,Dir1),
+             ( faz_fronteira_com_teletransporte(VX,VY,Dir1),
+               Dist is abs(VX-X0)+abs(VY-Y0) ),
+             Pairs), Pairs \= [],
+    keysort(Pairs,[D-(TX,TY,Dir)|_]).
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Monstro CERTO numa posição
-monster_cert_cell(X,Y) :-
+%% acha lugar visitado com suspeita de poco adjacente mais proximo do agente
+adj_a_poco_mais_prox(TX,TY,Dir,D) :-                     
+    posicao(X0,Y0,_),
+    findall( Dist-(VX,VY,Dir1),
+             ( faz_fronteira_com_poco(VX,VY,Dir1),
+               Dist is abs(VX-X0)+abs(VY-Y0) ),
+             Pairs), Pairs \= [],
+    keysort(Pairs,[D-(TX,TY,Dir)|_]).
+
+%% acha lugar visitado com energia mais proximo do agente
+energia_mais_prox(TX,TY,D) :-
+    posicao(X0,Y0,_),
+    findall(
+      Dist-(PX,PY),
+      (
+        memory(PX,PY,[reflexo]),
+        Dist is abs(PX-X0) + abs(PY-Y0)
+      ),
+      Pairs), Pairs \= [],
+    keysort(Pairs,[D-(TX,TY)|_]).
+
+%% acha lugar visitado e livre mais proximo do agente
+livre_mais_prox(TX,TY,D) :-
+    posicao(X0,Y0,_),
+    findall(
+     Dist-(VX,VY),
+      ( visitado(VX,VY),
+        Dist is abs(VX-X0) + abs(VY-Y0),
+        adjacente_valido(VX,VY)
+      ),									 
+      Pairs),
+    Pairs \= [],
+    keysort(Pairs, [D-(TX,TY)|_]).
+
+%% funcs verificação de posição
+
+%% quem é o lugar de frente para o agente?
+proximo(X,Y,norte,  X, Y1) :- Y1 is Y+1.
+proximo(X,Y,sul,    X, Y1) :- Y1 is Y-1.
+proximo(X,Y,leste,  X1, Y) :- X1 is X+1.
+proximo(X,Y,oeste,  X1, Y) :- X1 is X-1.
+
+%% certeza de monstro em um lugar?
+monstro_certo(X,Y) :-
     certeza(X,Y),
     memory(X,Y,L),
     member(passos,L).
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Bloco suspeito de monstro, considera sempre o pior caso  
-monster_sus_cell(X,Y) :-
+%% suspeita de monstro em um lugar (não certeza)
+monstro_suspeito(X,Y) :-
     memory(X,Y,L),
     member(passos, L),
     \+ member(palmas, L),
     \+ member(brisa, L),
     \+ certeza(X,Y).
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Bloco suspeito de morcego, considera sempre o pior caso
-bat_sus_cell(X,Y) :-
+%% suspeita de teletransporte (não certeza)
+teletransporte_suspeito(X,Y) :-
     memory(X,Y,L),
     member(palmas, L),
     \+ member(passos, L),
     \+ member(brisa, L),
     \+ certeza(X,Y).
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Bloco suspeito de poço (brisa), considera sempre o pior caso
-pit_sus_cell(X,Y) :-
+%% suspeita de poço (não certeza)
+poco_suspeito(X,Y) :-
     memory(X,Y,L),
     member(brisa, L),
     \+ certeza(X,Y).
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Verifica se há ao menos um bloco suspeito de monstro (não certeza)
-known_monster :-
-    monster_sus_cell(X,Y).
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% existe pelo menos um monstro suspeito no mapa?
+existe_monstro_suspeito :-
+    monstro_suspeito(X,Y).
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Mapeia cada direção em um delta (DX,DY).
-possible_dir(norte, 0,  1).
-possible_dir(leste,  1,  0).
-possible_dir(sul,    0, -1).
-possible_dir(oeste, -1,  0).
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% funcs auxiliares
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Retorna um index relacionado a direção
-dir_index(norte, 0).
-dir_index(leste, 1).
-dir_index(sul,   2).
-dir_index(oeste, 3).
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% retorna se lugar tem algum adjacente válido
+adjacente_valido(X,Y) :-
+    member((DX,DY), [(1,0),(-1,0),(0,1),(0,-1)]),
+	NX is X + DX, NY is Y + DY,
+    map_size(MAX_X,MAX_Y),
+    between(1,MAX_X,NX), between(1,MAX_Y,NY),
+    \+ visitado(NX,NY),
+    memory(NX,NY,Percepts),	Percepts = [],
+    !.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Seguro(X,Y) é verdade se o agente tem CERTEZA de que (X,Y) é um local seguro,
-seguro(1,1).
+%% ajuda o agente a executar o giro para a direção correta
+executar_giro(DirAtual, DirAlvo, virar_direita) :-
+    idx_direcao(DirAtual, I1),
+    idx_direcao(DirAlvo,  I2),
+    D is (I2 - I1 + 4) mod 4,
+    D =:= 1, !.
 
-seguro(X,Y) :-
-    certeza(X,Y),
-    memory(X,Y, []).
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+executar_giro(DirAtual, DirAlvo, virar_esquerda) :-
+    idx_direcao(DirAtual, I1),
+    idx_direcao(DirAlvo,  I2),
+    D is (I2 - I1 + 4) mod 4,
+    D =:= 3, !.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Diz quem é o bloco a frente do agente
-% Recebe -> Local X,Y e direção do agente.
-% Retorna -> Cordenadas do bloco a frente.
-proximo(X,Y,norte,  X, Y1) :- Y1 is Y+1.
-proximo(X,Y,sul,    X, Y1) :- Y1 is Y-1.
-proximo(X,Y,leste,  X1, Y) :- X1 is X+1.
-proximo(X,Y,oeste,  X1, Y) :- X1 is X-1.
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+executar_giro(_DirAtual, _DirAlvo, virar_direita).
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% "Funções" auxiliares
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% retorna se um lugar que já foi visitado pelo agente faz fronteira com um bloco suspeito de monstro
+faz_fronteira_com_monstro(VX,VY,Dir) :-  
+    ( visitado(VX,VY) ; posicao(VX,VY,_) ),
+    direcoes(Dir,DX,DY),
+    MX is VX+DX,  MY is VY+DY,
+    monstro_suspeito(MX,MY),
+    seguro(VX,VY).
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Identifica o caso específico: agente preso entre monstros suspeitos e um monstro certo
-% Recebe -> 
-% Retorna ->
-trapped_monster_dir(DirM) :-
+%% retorna se um lugar que já foi visitado pelo agente faz fronteira com um bloco suspeito de teletransporte
+faz_fronteira_com_teletransporte(VX,VY,Dir) :-
+    ( visitado(VX,VY) ; posicao(VX,VY,_) ),
+    direcoes(Dir,DX,DY),
+    MX is VX+DX, MY is VY+DY,
+    teletransporte_suspeito(MX,MY),
+    seguro(VX,VY).
+
+%% retorna se um lugar que já foi visitado pelo agente faz fronteira com um bloco suspeito de poco
+faz_fronteira_com_poco(VX,VY,Dir) :-
+    ( visitado(VX,VY) ; posicao(VX,VY,_) ),
+    direcoes(Dir,DX,DY),
+    MX is VX+DX, MY is VY+DY,
+    poco_suspeito(MX,MY),
+    seguro(VX,VY).
+
+%% retorna direcao de coord válida que não apresenta obstáculo e ainda não foi visitada
+dir_valida(X,Y,Dir) :-
+    direcoes(Dir,DX,DY),
+    NX is X + DX,
+    NY is Y + DY,
+    map_size(MAX_X,MAX_Y),
+    between(1,MAX_X,NX),               
+    between(1,MAX_Y,NY),
+    memory(NX,NY,Percepts),
+    Percepts = [],
+    \+ visitado(NX,NY),
+    !.
+
+%% preso entre lugares com suspeita de pocos e/ou teletransporte e monstro certo?
+preso_entre_tp_e_monstro(DirM) :-
     posicao(X,Y,_),
 
-    possible_dir(DirM,DXM,DYM),         % Existe um monstro certo em alguma direção
+    direcoes(DirM,DXM,DYM),
     MX is X+DXM, MY is Y+DYM,
-    monster_cert_cell(MX,MY),
+    monstro_certo(MX,MY),
           
-    map_size(MAX_X,MAX_Y),              % Todos os outros vizinhos (diferentes de DirM) são monstros suspeitos
+    map_size(MAX_X,MAX_Y),
     forall(
-      ( possible_dir(Dir2,DX2,DY2),
+      ( direcoes(Dir2,DX2,DY2),
         Dir2 \= DirM,
         NX is X+DX2, NY is Y+DY2,
         between(1,MAX_X,NX),
         between(1,MAX_Y,NY)
       ),
-      (
-      monster_sus_cell(NX,NY))
-    ).
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Identifica o caso específico: agente preso entre poços/morcegos suspeitos e um monstro certo
-% Recebe -> 
-% Retorna -> Direção do mosntro
-trapped_bat_pit_dir(DirM) :-
-    posicao(X,Y,_),
-
-    possible_dir(DirM,DXM,DYM),         % Existe um monstro certo em alguma direção
-    MX is X+DXM, MY is Y+DYM,
-    monster_cert_cell(MX,MY),
-          
-    map_size(MAX_X,MAX_Y),              % Todos os outros vizinhos (diferentes de DirM) são poços/morcegos suspeitos
-    forall(
-      ( possible_dir(Dir2,DX2,DY2),
-        Dir2 \= DirM,
-        NX is X+DX2, NY is Y+DY2,
-        between(1,MAX_X,NX),
-        between(1,MAX_Y,NY)
-      ),
-      ( pit_sus_cell(NX,NY)
-      ; bat_sus_cell(NX,NY)
+      ( poco_suspeito(NX,NY)
+      ; teletransporte_suspeito(NX,NY)
       )
     ).
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Informa para qual direção o agente deve virar de acordo para onde ele quer ir
-% Recebe -> Direção atual do agente
-% Retorna -> virar a esquerda ou virar a direita
-turn_action(DirAtual, DirAlvo, virar_direita) :-
-    dir_index(DirAtual, I1),     % Pega index da direção do jogador
-    dir_index(DirAlvo,  I2),     % Pega index da direção alvo
-    D is (I2 - I1 + 4) mod 4,    % Diferença
-    D =:= 1, !.                  % Se a diferença é 1, vire a direita
-
-turn_action(DirAtual, DirAlvo, virar_esquerda) :-
-    dir_index(DirAtual, I1),	% Pega index da direção do jogador
-    dir_index(DirAlvo,  I2),	% Pega index da direção alvo
-    D is (I2 - I1 + 4) mod 4, 	% Diferença
-    D =:= 3, !.					% Se a diferença é 3, vire a esquerda
-
-% Se for oposto (diferença 2), vira a direita por convenção
-turn_action(_DirAtual, _DirAlvo, virar_direita).
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Informa a direção de uma das coordenadas "válidas" (não visitada e sem obstáculo) em relação a um local
-% Recebe -> Coordenadas do bloco de origem
-% Retorna -> Uma das quatro direções válidas
-valid_direction(X,Y,Dir) :-
-    possible_dir(Dir,DX,DY),           % Para cada uma das possíveis direções
-    NX is X + DX,
-    NY is Y + DY,
-    map_size(MAX_X,MAX_Y),             % Se está dentro dos limites do mapa
-    between(1,MAX_X,NX),               
-    between(1,MAX_Y,NY),
-    memory(NX,NY,Percepts),	           % Se não há percepção de perigo
-    Percepts = [],
-    \+ visitado(NX,NY),                % Se não foi visitada ainda
-    !.								   % Retorna a primeira válida
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Verifica se o bloco tem pelo menos um vizinho não visitado e sem avisos
-% Recebe -> Local X,Y do bloco.
-% Retorna -> Falso ou verdadeiro.
-has_safe_frontier(X,Y) :-
-    member((DX,DY), [(1,0),(-1,0),(0,1),(0,-1)]),          % Para todos incluidos em blocos ao lado de (X,Y) - (soma/subtrai 1 x e y), como (NX, NY), cheque:
-	NX is X + DX, NY is Y + DY,
-    map_size(MAX_X,MAX_Y),								   % Range do mapa (12x12)
-    between(1,MAX_X,NX), between(1,MAX_Y,NY),              % Se a cordenada adicionada estiver no range do mapa (entre 1 e 12) para x e y
-    \+ visitado(NX,NY),									   % E se visitado(NX,NY) não existir (o bloco não foi visitado)
-    memory(NX,NY,Percepts),	Percepts = [],				   % E se Percepts em memory(NX,NY) = Null ([], lista vazia) (não há suspeita de nada no bloco)
-    !.		 											   % Retorna true imediatamente quando acha um válido
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Verifica se um bloco visitado faz fronteira com um bloco suspeito de monstro
-% Recebe -> VX, VY: coordenadas de um bloco que já foi visitado
-% Retorna -> Dir: direção (norte, leste, sul ou oeste) que aponta do bloco (VX,VY) ao bloco onde há monstro
-monster_frontier(VX,VY,Dir) :-  
-    ( visitado(VX,VY) ; posicao(VX,VY,_) ),               % Ja foi visitado
-    possible_dir(Dir,DX,DY),           % Pra cada direção (Dir) obtém (DX,DY) correspondente  
-    MX is VX+DX,  MY is VY+DY,         % Calcula coordenadas (MX,MY) do bloco adjacente em direção Dir  
-    monster_sus_cell(MX,MY),           % Verifica se é um bloco suspeito de monstro 
-    seguro(VX,VY).                     % Garante que (VX,VY) é seguro
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Bloco visitado que faz fronteira com um bloco suspeito de morcego
-% Recebe -> VX,VY  bloco visitado e seguro
-% Retorna -> Dir  direção que aponta para o morcego suspeito
-bat_frontier(VX,VY,Dir) :-
-    ( visitado(VX,VY) ; posicao(VX,VY,_) ),               % Já visitado
-    possible_dir(Dir,DX,DY),            % Cada direção ortogonal
-    MX is VX+DX, MY is VY+DY,           % (MX,MY) adjacente
-    bat_sus_cell(MX,MY),                % É suspeita de morcego
-    seguro(VX,VY).                      % (VX,VY) é seguro
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Bloco visitado que faz fronteira com um bloco suspeito de poço
-% Recebe -> VX,VY  bloco visitado e seguro
-% Retorna -> Dir   direção que aponta para o poço suspeito
-pit_frontier(VX,VY,Dir) :-
-    ( visitado(VX,VY) ; posicao(VX,VY,_) ),                 % Já visitado
-    possible_dir(Dir,DX,DY),            % Cada direção ortogonal
-    MX is VX+DX, MY is VY+DY,           % (MX,MY) adjacente
-    pit_sus_cell(MX,MY),                % É suspeita de poço
-    seguro(VX,VY).                      % (VX,VY) é seguro
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% "Funções" principais
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Encontra o bloco “aberto” (já visitado) mais próximo de onde o agente está
-% Recebe -> 
-% Retorna -> Coordernadas do bloco "aberto" mais próximo
-
-nearest_open(TX,TY,D) :-
-    posicao(X0,Y0,_),						 % Acha a posição atual (posição é unica, sempre que se registra uma nova em andar se apaga a antiga logo so há uma)
-    findall(								 % Acha todos 
-     Dist-(VX,VY),                           % Monta uma lista de Dist-(VX,VY)
-      ( visitado(VX,VY),				     % Onde VX, VY são os visitados (blocos armazenados em visitados ou simplesmente blocos já visitados)			
-        Dist is abs(VX-X0) + abs(VY-Y0),     % Dist é a distancia delta X + delta Y (em relação a posição do jogador e o bloco visitado em questão)
-        has_safe_frontier(VX,VY)		     % Que retornam verdadeiro em "has_safe_frontier" (ou seja tem um bloco liberado)
-      ),									 
-      Pairs),								 % Guarda em Pairs os que atendem a condição
-    Pairs \= [],				             % Precisa ter ao menos um candidato
-    keysort(Pairs, [D-(TX,TY)|_]).			 % Da keysort baseado na menor distância (ordena as chaves D de forma crescente) e corta todos os elementos depois do primeiro (é o retorno)
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Encontra o bloco da “fronteira de monstro” (visitado, seguro e adjacente a monstro)
-% Recebe -> 
-% Retorna -> Coordenadas (TX,TY) do bloco visitado mais próximo que faz fronteira com um bloco suspeito de monstro
-
-nearest_monster_frontier(TX,TY,Dir,D) :-
-    posicao(X0,Y0,_),                            % Obtém a posição atual do agente
-    findall( Dist-(VX,VY,Dir1),                  % Para todo (x,y,direção)
-             ( monster_frontier(VX,VY,Dir1),     % Blocos visitados e seguros com fronteira a suspeitas de monstro  
-               Dist is abs(VX-X0)+abs(VY-Y0) ),  % Distância
-             Pairs), Pairs \= [],                % Se houver algum
-    keysort(Pairs,[D-(TX,TY,Dir)|_]).            % Filtra o com a menor distância   
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Encontra o bloco com poção mais próximo 
-% Recebe -> 
-% Retorna -> Coordenadas (TX,TY) coordenadas do bloco onde há poção 
-
-nearest_potion(TX,TY,D) :-
-    posicao(X0,Y0,_),                            % Obtém a posição atual do agente (X0,Y0)
-    findall(
-      Dist-(PX,PY),                              % Para cada par (PX,PY), calcula Dist seguido das coordenadas
-      (
-        memory(PX,PY,[reflexo]),                 % Bloco com percepção de poção (reflexo) na memória
-        Dist is abs(PX-X0) + abs(PY-Y0)          % Calcula a distância  
+%% preso entre lugares com suspeita de monstro e monstro certo?
+preso_entre_monstros(DirM) :-
+    posicao(X,Y,_),
+    direcoes(DirM,DXM,DYM),
+    MX is X+DXM, MY is Y+DYM,
+    monstro_certo(MX,MY), 
+    map_size(MAX_X,MAX_Y),
+    forall(
+      ( direcoes(Dir2,DX2,DY2),
+        Dir2 \= DirM,
+        NX is X+DX2, NY is Y+DY2,
+        between(1,MAX_X,NX),
+        between(1,MAX_Y,NY)
       ),
-      Pairs), Pairs \= [],                       % Se houver algum
-    keysort(Pairs,[D-(TX,TY)|_]).                % Filtra o com a menor distância 
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Encontra o bat_frontier mais próximo do agente
-% Recebe -> 
-% Retorna -> TX,TY   bloco visitado seguro mais próximo
-
-nearest_bat_frontier(TX,TY,Dir,D) :-                     
-    posicao(X0,Y0,_),                                % Obtém a posição atual do agente (X0,Y0)    
-    findall( Dist-(VX,VY,Dir1),                      % Para todo (x,y,direção)
-             ( bat_frontier(VX,VY,Dir1),             % Blocos visitados e seguros com fronteira a suspeitas de morcego  
-               Dist is abs(VX-X0)+abs(VY-Y0) ),      % Distância
-             Pairs), Pairs \= [],                    % Se houver algum
-    keysort(Pairs,[D-(TX,TY,Dir)|_]).                % Filtra o com a menor distância   
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Encontra o pit_frontier mais próximo do agente
-% Recebe -> 
-% Retorna -> TX,TY  bloco visitado seguro mais próximo
-
-nearest_pit_frontier(TX,TY,Dir,D) :-                     
-    posicao(X0,Y0,_),                                % posição atual
-    findall( Dist-(VX,VY,Dir1),
-             ( pit_frontier(VX,VY,Dir1),
-               Dist is abs(VX-X0)+abs(VY-Y0) ),
-             Pairs), Pairs \= [],
-    keysort(Pairs,[D-(TX,TY,Dir)|_]).
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+      (
+      monstro_suspeito(NX,NY))
+    ).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Ordem de execução de ações
@@ -632,14 +527,14 @@ executa_acao(andar) :-
 % 5- se houver espaço livre ao redor do jogador, gira para a direção desse local
 executa_acao(X) :-
     posicao(XN,YN,DirAtual),            
-    valid_direction(XN,YN,DirAlvo),     
-    turn_action(DirAtual, DirAlvo, X), 
+    dir_valida(XN,YN,DirAlvo),     
+    executar_giro(DirAtual, DirAlvo, X), 
     !.
 
 % 6- busca o bloco aberto mais próximo e usa go_to (A*), só se não estiver já lá
 executa_acao(X) :-
     posicao(CX, CY, _),
-    nearest_open(TX, TY, _),
+    livre_mais_prox(TX, TY, _),
     not_blocked(TX,TY),
     (CX \= TX ; CY \= TY),          
     X = go_to(TX, TY),
@@ -647,69 +542,69 @@ executa_acao(X) :-
 
 % 7- se estiver cercado, tenta passar por monstros suspeitos se tiver energia suficiente
 executa_acao(X) :-
-    max_monster_damage(MaxD),                   % verifica dano máximo do monstro
-    energia(E), E > MaxD,                       % só se energia for maior que o dano
-    nearest_monster_frontier(TX,TY,DirM,_),     % acha o bloco suspeito de monstro mais próximo
+    dano_max_do_monstro(MaxD),                   % verifica dano maximo do monstro
+    energia(E), E > MaxD,                        % só se energia for maior que o dano
+    adj_a_monstro_mais_prox(TX,TY,DirM,_),     % % acha o bloco suspeito de monstro mais próximo
     not_blocked(TX,TY),
     posicao(CX,CY,DirNow),                      % posição e direção atuais
     (   (CX \= TX ; CY \= TY)                   % se não está no bloco alvo
     ->  X = go_to(TX,TY)                        % vai até o bloco
     ;   ( DirNow \= DirM                        % se não está olhando para o monstro
-        -> turn_action(DirNow,DirM,X)           % gira para o monstro
+        -> executar_giro(DirNow,DirM,X)         % gira para o monstro
         ;  X = andar)                           % se já está olhando, anda
     ),
     !.
 
 % 8- se não tem energia para passar por monstros, procura poção conhecida
 executa_acao(X) :-
-    max_monster_damage(MaxD),   % pega o dano máximo do monstro
+    dano_max_do_monstro(MaxD),   % pega o dano maximo do monstro
     energia(E), E =< MaxD,      % se energia for menor ou igual ao dano
-    known_monster,              % existe monstro suspeito
-    nearest_potion(TX,TY,_),    % existe poção conhecida
+    existe_monstro_suspeito,              % existe monstro suspeito
+    energia_mais_prox(TX,TY,_),    % existe poção conhecida
     not_blocked(TX,TY),    
     X = go_to(TX,TY),
     !.
 
 % 9- tenta chegar até o morcego suspeito mais próximo
 executa_acao(X) :-
-    nearest_bat_frontier(TX,TY,DirB,_),    % encontra fronteira de morcego suspeito
+    adj_a_tp_mais_prox(TX,TY,DirB,_),    % encontra fronteira de morcego suspeito
     not_blocked(TX,TY), 
     posicao(CX,CY,DirNow),                 % posição e direção do jogador
     (   (CX \= TX ; CY \= TY)              % se não está no bloco alvo
     ->  X = go_to(TX,TY)                   % vai até o bloco
     ;   ( DirNow \= DirB                   % se não está olhando para o morcego
-        -> turn_action(DirNow,DirB,X)      % gira para o morcego
+        -> executar_giro(DirNow,DirB,X)      % gira para o morcego
         ;  X = andar)                      % se já está olhando, anda
     ),
     !.
 
 % 10 – se estiver preso entre monstros suspeitos e um monstro confirmado atrás, anda
 executa_acao(X) :-
-    trapped_monster_dir(DirM),          % verifica se está nessa situação
+    preso_entre_monstros(DirM),         % verifica se está nessa situação
     X = andar,                          % anda para frente
     !.
 
 % 11 – se estiver encurralado entre poços/morcegos suspeitos e monstro certo atrás, gira ou anda
 executa_acao(X) :-
-    trapped_bat_pit_dir(DirM),        % verifica se está nessa situação
-    max_monster_damage(MaxD),
+    preso_entre_tp_e_monstro(DirM),        % verifica se está nessa situação
+    dano_max_do_monstro(MaxD),
     energia(E),                       % verifica energia
     E  > MaxD,                       
     posicao(_,_,DirNow),
     ( DirNow \= DirM                  % se não está virado para o monstro
-    -> turn_action(DirNow,DirM,X)     % gira para ele
+    -> executar_giro(DirNow,DirM,X)     % gira para ele
     ;  X = andar                      % se já está virado, anda
     ),
     !.
 
 % 12 – se nada acima funcionar, vai para o poço suspeito mais próximo
 executa_acao(X) :-
-    nearest_pit_frontier(TX,TY,DirP,_),        % encontra fronteira de poço suspeito
+    adj_a_poco_mais_prox(TX,TY,DirP,_),        % encontra fronteira de poço suspeito
     not_blocked(TX,TY), 
     posicao(CX,CY,DirNow),
     (   (CX \= TX ; CY \= TY)                  % se ainda não chegou lá
     ->  X = go_to(TX,TY)                       % vai até o local
     ;   ( DirNow \= DirP                       % se não está virado para o poço
-        -> turn_action(DirNow,DirP,X)          % gira para o poço
+        -> executar_giro(DirNow,DirP,X)          % gira para o poço
         ;  X = andar)                          % se já está virado, avança
     ).
